@@ -9,9 +9,6 @@ PAGE_SIZE = 10
 projects = load_projects()
 
 
-# =========================
-# START
-# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton(p["name"], callback_data=p["name"])]
@@ -24,9 +21,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =========================
-# SHOW VERSION
-# =========================
 async def show_versions(message, context, page):
     versions = context.user_data["versions"]
     name = context.user_data["project"]
@@ -51,18 +45,13 @@ async def show_versions(message, context, page):
         keyboard.append(nav)
 
     await message.reply_text(
-        f"Chọn version (Page {page+1})",
+        f"Chọn branch (Page {page+1})",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-# =========================
-# SELECT PROJECT
-# =========================
 async def handle_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-
-    # ✅ trả lời ngay lập tức
     await query.answer()
 
     name = query.data
@@ -70,20 +59,17 @@ async def handle_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     project_dir = os.path.join(BASE_DIR, name)
 
-    # ✅ báo loading
-    msg = await query.message.reply_text("⏳ Đang xử lý...")
+    msg = await query.message.reply_text("⏳ Đang load branch...")
 
     if not os.path.isdir(project_dir):
-        ok = clone_repo(project["repo"], project_dir)
-
-        if not ok:
+        if not clone_repo(project["repo"], project_dir):
             await msg.edit_text("❌ Clone fail")
             return
 
     versions = await get_versions(project_dir)
 
     if not versions:
-        await msg.edit_text("❌ Không có version")
+        await msg.edit_text("❌ Không có branch")
         return
 
     context.user_data["versions"] = versions
@@ -93,9 +79,6 @@ async def handle_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_versions(query.message, context, 0)
 
 
-# =========================
-# PAGE
-# =========================
 async def handle_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -104,9 +87,6 @@ async def handle_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_versions(query.message, context, int(page))
 
 
-# =========================
-# BUILD
-# =========================
 async def handle_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -117,9 +97,6 @@ async def handle_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await build_project(context.bot, query.message.chat_id, project, version)
 
 
-# =========================
-# MAIN
-# =========================
 def main():
     os.makedirs(BASE_DIR, exist_ok=True)
 

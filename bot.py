@@ -1,10 +1,11 @@
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import *
+from telegram.ext import *
 
 import os
 from config import *
-from build_manager import load_projects, get_versions, build_project
+from build_manager import *
 
+PAGE_SIZE = 10
 projects = load_projects()
 
 
@@ -24,10 +25,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# CHỌN PROJECT
+# SHOW VERSION
+# =========================
+async def show_versions(message, context, page):
+    versions = context.user_data["versions"]
+    name = context.user_data["project"]
+
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+
+    current = versions[start:end]
+
+    keyboard = [
+        [InlineKeyboardButton(v, callback_data=f"{name}|{v}")]
+        for v in current
+    ]
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"page|{page-1}"))
+    if end < len(versions):
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"page|{page+1}"))
+
+    if nav:
+        keyboard.append(nav)
+
+    await message.reply_text(
+        f"Chọn version (Page {page+1})",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# =========================
+# SELECT PROJECT
 # =========================
 async def handle_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+
+    # ✅ trả lời ngay lập tức
     await query.answer()
 
     name = query.data
@@ -35,24 +70,38 @@ async def handle_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     project_dir = os.path.join(BASE_DIR, name)
 
-    if not os.path.exists(project_dir):
-        os.system(f"git clone {project['repo']} {project_dir}")
+    # ✅ báo loading
+    msg = await query.message.reply_text("⏳ Đang xử lý...")
+
+    if not os.path.isdir(project_dir):
+        ok = clone_repo(project["repo"], project_dir)
+
+        if not ok:
+            await msg.edit_text("❌ Clone fail")
+            return
 
     versions = await get_versions(project_dir)
 
     if not versions:
-        await query.message.reply_text("❌ Không có version")
+        await msg.edit_text("❌ Không có version")
         return
 
-    keyboard = [
-        [InlineKeyboardButton(v, callback_data=f"{name}|{v}")]
-        for v in versions
-    ]
+    context.user_data["versions"] = versions
+    context.user_data["project"] = name
 
-    await query.message.reply_text(
-        "Chọn version:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await msg.delete()
+    await show_versions(query.message, context, 0)
+
+
+# =========================
+# PAGE
+# =========================
+async def handle_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    _, page = query.data.split("|")
+    await show_versions(query.message, context, int(page))
 
 
 # =========================
@@ -63,7 +112,6 @@ async def handle_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     name, version = query.data.split("|")
-
     project = next(p for p in projects if p["name"] == name)
 
     await build_project(context.bot, query.message.chat_id, project, version)
@@ -79,6 +127,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_project, pattern="^[^|]+$"))
+    app.add_handler(CallbackQueryHandler(handle_page, pattern="^page\\|"))
     app.add_handler(CallbackQueryHandler(handle_version, pattern=".+\\|.+"))
 
     print("Bot running...")

@@ -82,15 +82,19 @@ def create_local_properties(project_dir):
 # KEYSTORE
 # =========================
 def create_keystore(project_dir, name):
-    key_dir = os.path.join(project_dir, "app", "key")
+    # Tạo folder 'key' nằm trong project_dir theo sơ đồ
+    key_dir = os.path.join(project_dir, "key")
     os.makedirs(key_dir, exist_ok=True)
 
-    prefix = name.split("_")[0]
+    # Filename: 3 chữ cái đầu của project + _keystore
+    prefix = name[:3]
     path = os.path.join(key_dir, f"{prefix}_keystore.jks")
 
+    # Kiểm tra nếu đã có keystore thì bỏ qua (Đã có -> Build)
     if os.path.exists(path):
         return path
 
+    # Lệnh tạo keystore mới nếu chưa có
     cmd = f'''
     keytool -genkey -v -keystore "{path}"
     -storepass {KEYSTORE_PASSWORD}
@@ -102,7 +106,6 @@ def create_keystore(project_dir, name):
 
     subprocess.run(cmd, shell=True)
     return path
-
 
 # =========================
 # GET ALL BRANCH (git branch -a)
@@ -146,59 +149,65 @@ async def build_project(bot, chat_id, project, version):
     project_dir = os.path.join(BASE_DIR, name)
 
     try:
-        await bot.send_message(chat_id, f"🚀 Build: {version}")
+        await bot.send_message(chat_id, f"🚀 Đang chuẩn bị Build AAB cho: {version}")
 
+        # 1. Kiểm tra project đã có chưa, nếu chưa thì Clone
         if not os.path.isdir(project_dir):
             if not clone_repo(repo, project_dir):
-                await bot.send_message(chat_id, "❌ Clone fail")
+                await bot.send_message(chat_id, "❌ Clone thất bại")
                 return
 
-        # fetch latest
+        # 2. Pull code / Fetch branch mới nhất
         async for _ in run_cmd("git fetch --all --prune", project_dir):
             pass
 
-        # checkout từ remote
         checkout_cmd = f"git checkout -B {version} origin/{version}"
+        async for _ in run_cmd(checkout_cmd, project_dir): pass
+        async for _ in run_cmd("git pull origin {version}", project_dir): pass
 
-        async for line in run_cmd(checkout_cmd, project_dir):
-            print(line)
-
-        # pull
-        async for line in run_cmd("git pull", project_dir):
-            print(line)
-
+        # 3. Kiểm tra/Tạo Keystore & local.properties
         create_keystore(project_dir, name)
         create_local_properties(project_dir)
 
-        cmd = "gradlew assembleRelease" if os.name == "nt" else "./gradlew assembleRelease"
+        # 4. Lệnh Build AAB (bundleRelease)
+        cmd = "gradlew bundleRelease" if os.name == "nt" else "./gradlew bundleRelease"
+
+        await bot.send_message(chat_id, "🛠 Đang thực thi lệnh Build AAB...")
 
         success = True
         logs = []
-
         async for line in run_cmd(cmd, project_dir):
-            print(line)
             logs.append(line)
-
-            if len(logs) > 200:
-                logs.pop(0)
-
-            if "FAILURE" in line:
-                success = False
+            if len(logs) > 200: logs.pop(0)
+            if "FAILURE" in line: success = False
 
         if not success:
-            await bot.send_message(chat_id, "\n".join(logs[-40:]))
+            # Gửi 40 dòng log cuối nếu lỗi
+            await bot.send_message(chat_id, "❌ Build thất bại. Chi tiết lỗi:\n" + "\n".join(logs[-40:]))
             return
 
-        apk = None
+        # 5. Tìm và gửi file .aab
+        aab_path = None
         for root, _, files in os.walk(project_dir):
             for f in files:
-                if f.endswith(".apk"):
-                    apk = os.path.join(root, f)
+                if f.endswith(".aab"):
+                    aab_path = os.path.join(root, f)
+                    break
 
-        if apk:
-            await bot.send_document(chat_id, open(apk, "rb"))
+        # Trong build_manager.py, hàm build_project
+        if aab_path:
+            # Mở file để gửi
+            with open(aab_path, "rb") as document:
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=document,
+                    caption=f"✅ Build AAB thành công: {version}",
+                    read_timeout=900,   # Tăng thời gian chờ lên 10 phút (600s)
+                    write_timeout=900,  # Đảm bảo đủ thời gian để upload file lớn
+                    connect_timeout=90  # Thời gian kết nối ban đầu
+                )
         else:
-            await bot.send_message(chat_id, "❌ Không tìm thấy APK")
+            await bot.send_message(chat_id, "❌ Build xong nhưng không tìm thấy file .aab")
 
     except Exception as e:
-        await bot.send_message(chat_id, str(e))
+        await bot.send_message(chat_id, f"⚠️ Có lỗi xảy ra: {str(e)}")

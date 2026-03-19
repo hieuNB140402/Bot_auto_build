@@ -100,7 +100,13 @@ async def handle_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     os.makedirs(BASE_DIR, exist_ok=True)
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    # Tăng thời gian chờ mặc định cho toàn bộ ứng dụng
+    app = ApplicationBuilder() \
+        .token(TOKEN) \
+        .read_timeout(1000) \
+        .write_timeout(1000) \
+        .connect_timeout(100) \
+        .build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_project, pattern="^[^|]+$"))

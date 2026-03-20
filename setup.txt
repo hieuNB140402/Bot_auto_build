@@ -1,0 +1,7 @@
+0. cmd: setx BUILD_ENV production (Chuyển biến môi trường để build aab là ads thật). Khởi động lại cmd, nhập echo %BUILD_ENV% nếu ra production thì đúng.
+1. Setup python (chạy ổn định nhấ 3.14.0 đã test)
+2. cmd: pip install python-telegram-bot==22.7
+3. Chuyển thư mục bot (rar/zip) sang máy build
+4. Mở file config.py, thay thế key (lấy từ bot telegram)
+5. Cài đặt các version jdk (8u481, 11.0.30, 17.0.18, 21, 25, 26) trong đường dẫn C:\Program Files\Java\
+6. Mở projects.json, sửa tất cả project sao cho đúng tên bắt đầu với ST... (Ví dụ: ST001) và repo

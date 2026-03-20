@@ -37,15 +37,15 @@ async def show_versions(message, context, page):
 
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("⬅️", callback_data=f"page|{page-1}"))
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"page|{page - 1}"))
     if end < len(versions):
-        nav.append(InlineKeyboardButton("➡️", callback_data=f"page|{page+1}"))
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"page|{page + 1}"))
 
     if nav:
         keyboard.append(nav)
 
     await message.reply_text(
-        f"Chọn branch (Page {page+1})",
+        f"Chọn branch (Page {page + 1})",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -101,12 +101,15 @@ def main():
     os.makedirs(BASE_DIR, exist_ok=True)
 
     # Tăng thời gian chờ mặc định cho toàn bộ ứng dụng
-    app = ApplicationBuilder() \
-        .token(TOKEN) \
-        .read_timeout(1000) \
-        .write_timeout(1000) \
-        .connect_timeout(100) \
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .read_timeout(2000)  # Tăng lên 2000 giây (~33 phút)
+        .write_timeout(2000)
+        .connect_timeout(120)
+        .pool_timeout(120)
         .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_project, pattern="^[^|]+$"))

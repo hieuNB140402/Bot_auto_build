@@ -1,0 +1,65 @@
+def env = System.getenv("BUILD_ENV")
+def isProd = env == "production"
+
+println("BUILD_ENV = " + env)
+
+def adKeys = ["app_id",
+              "inter_splash",
+              "inter_per"]
+
+def testAds = [app_id      : "ca-app-pub-3940256099942544~3347511713",
+               inter_splash: "ca-app-pub-3940256099942544/1033173712",
+               inter_per   : "ca-app-pub-3940256099942544/1033173712"]
+
+def realAds = [app_id      : "REAL_APP_ID",
+               inter_splash: "REAL_INTER",
+               inter_per   : "REAL_INTER"]
+
+
+android {
+	signingConfigs {
+        release {
+            def keyDir = file('key')
+
+            def keystoreFile = keyDir.listFiles()?.find { it.isFile() }
+
+            if (keystoreFile != null) {
+                storeFile keystoreFile
+                storePassword "lvtapp@123"
+                keyAlias "keystore"
+                keyPassword "lvtapp@123"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            adKeys.each { key ->
+                def value =  testAds[key]
+
+                if (value == null) {
+                    throw new GradleException("❌ Missing ads key: " + key)
+                }
+
+                resValue "string", key, value
+            }
+        }
+
+        release {
+            minifyEnabled true
+            shrinkResources true
+            signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+
+            adKeys.each { key ->
+                def value = isProd ? realAds[key] : testAds[key]
+
+                if (value == null) {
+                    throw new GradleException("❌ Missing ads key: " + key)
+                }
+
+                resValue "string", key, value
+            }
+        }
+    }
+}

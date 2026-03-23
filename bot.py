@@ -104,9 +104,9 @@ def main():
     app = (
         ApplicationBuilder()
         .token(TOKEN)
-        .read_timeout(2000)  # Tăng lên 2000 giây (~33 phút)
-        .write_timeout(2000)
-        .connect_timeout(120)
+        .connect_timeout(120)   # Chờ kết nối 2 phút
+        .read_timeout(2000)      # Chờ đọc dữ liệu 30 phút (Build mất 18p thì để 30p là an toàn)
+        .write_timeout(2000)     # Chờ upload file nặng 30 phút
         .pool_timeout(120)
         .build()
     )

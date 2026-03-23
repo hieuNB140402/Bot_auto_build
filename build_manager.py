@@ -170,69 +170,73 @@ async def build_project(bot, chat_id, project, version):
     project_dir = os.path.join(BASE_DIR, name)
     prefix = name[:5]
 
-    # Cấu hình đường dẫn Keystore
     key_rel_path = f"app/key/{prefix}_keystore.jks"
     key_full_path = os.path.join(project_dir, key_rel_path)
-    key_existed_before = os.path.exists(key_full_path)
 
     try:
         await bot.send_message(chat_id, f"🚀 [Server] Bắt đầu Build AAB: {name}\n🌿 Branch: {version}")
 
-        # 1. Đồng bộ Source Code
+        # 1. Clone nếu chưa có
         if not os.path.isdir(project_dir):
             if not clone_repo(repo, project_dir):
                 await bot.send_message(chat_id, "❌ Clone thất bại")
                 return
 
+        # 2. Checkout + pull
         async for _ in run_cmd("git fetch --all --prune", project_dir): pass
         async for _ in run_cmd(f"git checkout -B {version} origin/{version}", project_dir): pass
         async for _ in run_cmd(f"git pull origin {version}", project_dir): pass
 
-        # 2. Cấu hình môi trường & Keystore
+        # 3. Keystore + config
         create_keystore(project_dir, name)
         create_local_properties(project_dir)
 
-        # Dọn dẹp folder build cũ (Fix lỗi Windows Lock file)
+        # Xóa build cũ
         app_build_dir = os.path.join(project_dir, "app", "build")
         if os.path.exists(app_build_dir):
-            try: shutil.rmtree(app_build_dir)
-            except: pass
+            try:
+                shutil.rmtree(app_build_dir)
+            except:
+                pass
 
-        # 3. Lệnh Build với giới hạn CPU (Duy trì nhịp thở cho Bot)
+        # 4. Build
         jdk_path = get_required_jdk(project_dir).replace('\\', '/')
         gradle_exe = "gradlew" if os.name == "nt" else "./gradlew"
 
-        # --max-workers=2 giúp CPU không chạm 100%, tránh rớt mạng Telegram
         cmd = (
             f'{gradle_exe} clean bundleRelease '
             f'-Dorg.gradle.java.home="{jdk_path}" '
             f'--no-daemon --max-workers=2 --stacktrace'
         )
 
-        await bot.send_message(chat_id, f"🛠 Đang thực thi Build (Dự kiến 15-20 phút)...")
+        await bot.send_message(chat_id, "🛠 Đang build (15-20 phút)...")
 
-        # --- QUÁ TRÌNH BUILD & HEARTBEAT ---
         success = True
-        logs = []
         start_time = time.time()
         last_heartbeat = start_time
 
         async for line in run_cmd(cmd, project_dir):
             print(f"[{name}] {line}")
+
             now = time.time()
-            # Gửi Heartbeat mỗi 5 phút để Client biết Server vẫn sống
             if now - last_heartbeat > 300:
                 try:
-                    await bot.send_message(chat_id, f"⏳ Vẫn đang build [{name}]... (Đã chạy {int((now-start_time)/60)} phút)")
+                    await bot.send_message(
+                        chat_id,
+                        f"⏳ Vẫn đang build [{name}]... ({int((now-start_time)/60)} phút)"
+                    )
                     last_heartbeat = now
-                except: pass
+                except:
+                    pass
+
             if "BUILD FAILED" in line.upper() or "FAILURE" in line.upper():
                 success = False
 
         if not success:
-            await bot.send_message(chat_id, "❌ Build thất bại! Kiểm tra log trên Server."); return
+            await bot.send_message(chat_id, "❌ Build thất bại!")
+            return
 
-        # --- 4. TÌM, TỰ ĐỘNG TẠO FOLDER VÀ SAO LƯU FILE ---
+        # 5. Tìm file AAB
         aab_path = None
         search_paths = [
             os.path.join(project_dir, "app", "build", "outputs", "bundle", "release"),
@@ -243,58 +247,43 @@ async def build_project(bot, chat_id, project, version):
             if os.path.exists(p):
                 for f in os.listdir(p):
                     if f.endswith(".aab"):
-                        aab_path = os.path.join(p, f); break
-            if aab_path: break
+                        aab_path = os.path.join(p, f)
+                        break
+            if aab_path:
+                break
 
-        if aab_path and os.path.exists(aab_path):
-            file_size_mb = os.path.getsize(aab_path) / (1024 * 1024)
+        if not aab_path or not os.path.exists(aab_path):
+            await bot.send_message(chat_id, "❌ Không tìm thấy file AAB")
+            return
 
-            # ✅ FIX WinError 3: Tự động tạo chuỗi folder C:/APK Build/SUCCESS_AAB
-            backup_root = "C:/APK Build/SUCCESS_AAB"
-            os.makedirs(backup_root, exist_ok=True) # Tạo folder nếu chưa có
+        # 6. Copy file
+        backup_root = "C:/APK Build/SUCCESS_AAB"
+        os.makedirs(backup_root, exist_ok=True)
 
-            final_filename = f"{name}_{version}_{int(time.time())}.aab"
-            saved_path = os.path.join(backup_root, final_filename)
+        final_filename = f"{name}_{version}_{int(time.time())}.aab"
+        saved_path = os.path.join(backup_root, final_filename)
 
-            # Copy file an toàn sang thư mục quản lý
-            try:
-                shutil.copy2(aab_path, saved_path)
-                print(f"✨ Đã copy file vào: {saved_path}")
-            except Exception as e:
-                print(f"⚠️ Lỗi copy: {e}")
+        try:
+            shutil.copy2(aab_path, saved_path)
+        except Exception as e:
+            await bot.send_message(chat_id, f"⚠️ Lỗi copy file: {e}")
+            return
 
-            # --- 5. GỬI FILE VỀ CLIENT (TELEGRAM + GOFILE) ---
-            await bot.send_message(chat_id, f"✅ Build xong ({file_size_mb:.2f} MB). Đang chuyển file về máy bạn...")
+        file_size_mb = os.path.getsize(saved_path) / (1024 * 1024)
 
-            upload_success = False
-            # Thử gửi trực tiếp qua Telegram (3 lần)
-            for attempt in range(1, 4):
-                try:
-                    with open(saved_path, "rb") as document:
-                        await bot.send_document(
-                            chat_id=chat_id,
-                            document=document,
-                            filename=f"{name}_{version}.aab",
-                            caption=f"📦 Project: {name}\n📍 Server Path: {saved_path}",
-                            write_timeout=2000,
-                            connect_timeout=200
-                        )
-                    upload_success = True
-                    break
-                except Exception as e:
-                    print(f"⚠️ Lần {attempt} upload lỗi: {e}")
-                    await asyncio.sleep(15)
+        await bot.send_message(chat_id, f"✅ Build xong ({file_size_mb:.2f} MB)")
 
-            # Nếu Telegram thất bại (ReadError/Timeout), dùng Link Gofile dự phòng
-            if not upload_success:
-                await bot.send_message(chat_id, "⚠️ Telegram lag, đang tạo link tải dự phòng qua Gofile...")
-                link = await upload_to_gofile(saved_path)
-                if link:
-                    await bot.send_message(chat_id, f"🔗 LINK TẢI AAB DỰ PHÒNG:\n{link}")
-                else:
-                    await bot.send_message(chat_id, f"❌ Không thể upload link. Hãy lấy file tại:\n`{saved_path}`")
+        # =========================
+        # ✅ CHỈ UPLOAD SERVER
+        # =========================
+        await bot.send_message(chat_id, "☁️ Đang upload lên server...")
+
+        link = await upload_to_gofile(saved_path)
+
+        if link:
+            await bot.send_message(chat_id, f"🔗 LINK TẢI:\n{link}")
         else:
-            await bot.send_message(chat_id, "❌ Build thành công nhưng không tìm thấy file AAB ở đầu ra.")
+            await bot.send_message(chat_id, f"⚠️ Upload server lỗi\n📂 File local:\n`{saved_path}`")
 
     except Exception as e:
         import traceback

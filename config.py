@@ -3,7 +3,7 @@ import os
 TOKEN = "8669206541:AAEiaaMWWpKHi2sdgV07zq84MK4Deiaf1hs"
 
 # Thư mục chứa source build
-BASE_DIR = r"C:\APK Build"
+BASE_DIR = r"C:\APK_Build"
 
 # Keystore config
 KEYSTORE_PASSWORD = "lvtapp@123"

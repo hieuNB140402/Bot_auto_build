@@ -164,52 +164,178 @@ def create_keystore(project_dir, name):
 # =========================
 # MAIN BUILD PROCESS
 # =========================
+def clear_aab_files(folder_path):
+    import os
+
+    if not os.path.isdir(folder_path):
+        return
+
+    for f in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, f)
+
+        try:
+            # ❗ chỉ xóa file .aab thật sự
+            if os.path.isfile(file_path) and f.lower().endswith(".aab"):
+                os.remove(file_path)
+                print(f"🗑 Deleted: {file_path}")
+
+        except Exception as e:
+            print(f"⚠️ Không xóa được {file_path}: {e}")
+
+def find_best_aab(project_dir):
+    bundle_dir = os.path.join(project_dir, "app", "build", "outputs", "bundle")
+
+    if not os.path.isdir(bundle_dir):
+        return None
+
+    candidates = []
+
+    for root, _, files in os.walk(bundle_dir):
+        for f in files:
+            if not f.endswith(".aab"):
+                continue
+
+            name = f.lower()
+            if any(x in name for x in ["debug", "universal", "test"]):
+                continue
+            if "release" not in name:
+                continue
+
+            full = os.path.join(root, f)
+            try:
+                mtime = os.path.getmtime(full)
+            except:
+                mtime = 0
+
+            candidates.append((full, mtime))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates[0][0]
+
+
+def wait_file_ready(path, timeout=20):
+    start = time.time()
+    last_size = -1
+
+    while time.time() - start < timeout:
+        if not os.path.exists(path):
+            time.sleep(1)
+            continue
+
+        size = os.path.getsize(path)
+
+        if size > 0 and size == last_size:
+            return True
+
+        last_size = size
+        time.sleep(1)
+
+    return False
+
+
+def safe_copy(src, dst, retries=5):
+    for i in range(retries):
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+            return True
+        except Exception as e:
+            print(f"⚠️ Copy fail {i+1}: {e}")
+            time.sleep(2)
+    return False
+
+def find_best_aab(project_dir):
+    import os
+
+    bundle_dir = os.path.join(project_dir, "app", "build", "outputs", "bundle")
+
+    if not os.path.isdir(bundle_dir):
+        print("❌ Bundle dir không tồn tại:", bundle_dir)
+        return None
+
+    valid_files = []
+
+    for root, _, files in os.walk(bundle_dir):
+        for f in files:
+            if not f.endswith(".aab"):
+                continue
+
+            name = f.lower()
+            full_path = os.path.join(root, f)
+
+            # ❌ loại file không hợp lệ
+            if any(x in name for x in ["debug", "universal", "test"]):
+                continue
+
+            # ✅ chỉ lấy release
+            if "release" not in name:
+                continue
+
+            try:
+                mtime = os.path.getmtime(full_path)
+            except Exception:
+                mtime = 0
+
+            valid_files.append((full_path, mtime))
+
+    if not valid_files:
+        print("❌ Không có AAB hợp lệ")
+        return None
+
+    # lấy file mới nhất
+    valid_files.sort(key=lambda x: x[1], reverse=True)
+
+    best_file = valid_files[0][0]
+    print("🎯 Selected AAB:", best_file)
+
+    return best_file
+
 async def build_project(bot, chat_id, project, version):
+    import os, time
+
     name = project["name"]
     repo = project["repo"]
     project_dir = os.path.join(BASE_DIR, name)
-    prefix = name[:5]
-
-    key_rel_path = f"app/key/{prefix}_keystore.jks"
-    key_full_path = os.path.join(project_dir, key_rel_path)
 
     try:
-        await bot.send_message(chat_id, f"🚀 [Server] Bắt đầu Build AAB: {name}\n🌿 Branch: {version}")
+        await bot.send_message(chat_id, f"🚀 Build: {name}\n🌿 Branch: {version}")
 
-        # 1. Clone nếu chưa có
+        # =========================
+        # 1. CLONE + GIT
+        # =========================
         if not os.path.isdir(project_dir):
             if not clone_repo(repo, project_dir):
-                await bot.send_message(chat_id, "❌ Clone thất bại")
+                await bot.send_message(chat_id, "❌ Clone fail")
                 return
 
-        # 2. Checkout + pull
         async for _ in run_cmd("git fetch --all --prune", project_dir): pass
         async for _ in run_cmd(f"git checkout -B {version} origin/{version}", project_dir): pass
         async for _ in run_cmd(f"git pull origin {version}", project_dir): pass
 
-        # 3. Keystore + config
+        # =========================
+        # 2. CONFIG
+        # =========================
         create_keystore(project_dir, name)
         create_local_properties(project_dir)
 
-        # Xóa build cũ
-        app_build_dir = os.path.join(project_dir, "app", "build")
-        if os.path.exists(app_build_dir):
-            try:
-                shutil.rmtree(app_build_dir)
-            except:
-                pass
+        # clean
+        build_dir = os.path.join(project_dir, "app", "build")
+        if os.path.exists(build_dir):
+            try: shutil.rmtree(build_dir)
+            except: pass
 
-        # 4. Build
-        jdk_path = get_required_jdk(project_dir).replace('\\', '/')
-        gradle_exe = "gradlew" if os.name == "nt" else "./gradlew"
+        # =========================
+        # 3. BUILD
+        # =========================
+        jdk = get_required_jdk(project_dir).replace("\\", "/")
+        gradle = "gradlew" if os.name == "nt" else "./gradlew"
 
-        cmd = (
-            f'{gradle_exe} clean bundleRelease '
-            f'-Dorg.gradle.java.home="{jdk_path}" '
-            f'--no-daemon --max-workers=2 --stacktrace'
-        )
+        cmd = f'{gradle} clean bundleRelease -Dorg.gradle.java.home="{jdk}" --no-daemon --max-workers=2'
 
-        await bot.send_message(chat_id, "🛠 Đang build (15-20 phút)...")
+        await bot.send_message(chat_id, "🛠 Building...")
 
         success = True
         start_time = time.time()
@@ -236,56 +362,61 @@ async def build_project(bot, chat_id, project, version):
             await bot.send_message(chat_id, "❌ Build thất bại!")
             return
 
-        # 5. Tìm file AAB
-        aab_path = None
-        search_paths = [
-            os.path.join(project_dir, "app", "build", "outputs", "bundle", "release"),
-            os.path.join(project_dir, "build", "outputs", "bundle", "release")
-        ]
+        # =========================
+        # 4. FIND AAB
+        # =========================
+        aab_path = find_best_aab(project_dir)
 
-        for p in search_paths:
-            if os.path.exists(p):
-                for f in os.listdir(p):
-                    if f.endswith(".aab"):
-                        aab_path = os.path.join(p, f)
-                        break
-            if aab_path:
-                break
-
-        if not aab_path or not os.path.exists(aab_path):
-            await bot.send_message(chat_id, "❌ Không tìm thấy file AAB")
+        if not aab_path:
+            await bot.send_message(chat_id, "❌ Không tìm thấy AAB")
             return
 
-        # 6. Copy file
-        backup_root = "C:/APK Build/SUCCESS_AAB"
-        os.makedirs(backup_root, exist_ok=True)
+        print("🎯 AAB:", aab_path)
 
-        final_filename = f"{name}_{version}_{int(time.time())}.aab"
-        saved_path = os.path.join(backup_root, final_filename)
-
-        try:
-            shutil.copy2(aab_path, saved_path)
-        except Exception as e:
-            await bot.send_message(chat_id, f"⚠️ Lỗi copy file: {e}")
+        # =========================
+        # 5. WAIT FILE READY
+        # =========================
+        if not wait_file_ready(aab_path):
+            await bot.send_message(chat_id, "❌ File chưa sẵn sàng")
             return
 
-        file_size_mb = os.path.getsize(saved_path) / (1024 * 1024)
+        # =========================
+        # 6. COPY
+        # =========================
+        backup_root = os.path.abspath("C:/APK_Build/SUCCESS_AAB")
+        clear_aab_files(backup_root)
+        filename = f"{name}_{version}_{int(time.time())}.aab"
+        saved_path = os.path.join(backup_root, filename)
 
-        await bot.send_message(chat_id, f"✅ Build xong ({file_size_mb:.2f} MB)")
+        if not safe_copy(aab_path, saved_path):
+            await bot.send_message(chat_id, "❌ Copy fail")
+            return
+
+        size = os.path.getsize(saved_path) / (1024 * 1024)
+        await bot.send_message(chat_id, f"✅ Done: {size:.2f} MB")
 
         # =========================
-        # ✅ CHỈ UPLOAD SERVER
+        # 7. UPLOAD SONG SONG 🚀
         # =========================
-        await bot.send_message(chat_id, "☁️ Đang upload lên server...")
+        await bot.send_message(chat_id, "☁️ Uploading...")
 
-        link = await upload_to_gofile(saved_path)
+        async def upload_task():
+            return await upload_to_gofile(saved_path)
+
+        task = asyncio.create_task(upload_task())
+
+        # vẫn giữ bot responsive
+        while not task.done():
+            await asyncio.sleep(3)
+
+        link = task.result()
 
         if link:
-            await bot.send_message(chat_id, f"🔗 LINK TẢI:\n{link}")
+            await bot.send_message(chat_id, f"🔗 {link}")
         else:
-            await bot.send_message(chat_id, f"⚠️ Upload server lỗi\n📂 File local:\n`{saved_path}`")
+            await bot.send_message(chat_id, f"⚠️ Upload lỗi\n{saved_path}")
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        await bot.send_message(chat_id, f"⚠️ Lỗi hệ thống: {str(e)}")
+        await bot.send_message(chat_id, f"⚠️ {str(e)}")

@@ -154,12 +154,34 @@ def create_keystore(project_dir, name):
 
     cmd = (
         f'"{keytool_exe}" -genkey -v -keystore "{path_jks}" '
-        f'-storepass {KEY_STORE_PASSWORD} -alias {target_alias} '
+        f'-storepass {KEYSTORE_PASSWORD} -alias {target_alias} '
         f'-keypass {KEY_PASSWORD} -keyalg RSA -keysize 2048 -validity 10000 '
         f'-dname "CN=Android,O=Dev,C=VN" -storetype JKS'
     )
     subprocess.run(cmd, shell=True, capture_output=True)
+
     return path_jks
+
+async def push_key_to_github(project_dir, version, key_path, name):
+    """Commit và Push file keystore lên GitHub"""
+    try:
+        # Lấy tên file tương đối từ project_dir
+        rel_key_path = os.path.relpath(key_path, project_dir)
+
+        commands = [
+            f'git add "{rel_key_path}"',
+            f'git commit -m "chore: auto generate keystore for {name}"',
+            f'git push origin {version}'
+        ]
+
+        print(f"⬆️ Đang push key lên GitHub branch {version}...")
+        for cmd in commands:
+            async for line in run_cmd(cmd, project_dir):
+                print(f"[Git Push Key] {line}")
+        return True
+    except Exception as e:
+        print(f"❌ Lỗi push key: {e}")
+        return False
 
 # =========================
 # MAIN BUILD PROCESS
@@ -293,6 +315,7 @@ def find_best_aab(project_dir):
 
     return best_file
 
+
 async def build_project(bot, chat_id, project, version):
     import os, time
 
@@ -318,15 +341,36 @@ async def build_project(bot, chat_id, project, version):
         # =========================
         # 2. CONFIG
         # =========================
-        create_keystore(project_dir, name)
+        # Bước A: Tạo key nếu chưa có ở máy local
+        actual_key_path = create_keystore(project_dir, name)
         create_local_properties(project_dir)
 
-        # clean
+        # Bước B: Kiểm tra xem file key này đã được push lên GitHub chưa
+        # Lấy đường dẫn tương đối để check với git (ví dụ: app/key/abc_keystore.jks)
+        rel_key_path = os.path.relpath(actual_key_path, project_dir).replace("\\", "/")
+
+        is_on_github = False
+        async for line in run_cmd(f'git ls-files "{rel_key_path}"', project_dir):
+            if rel_key_path in line:
+                is_on_github = True
+                break
+
+        # Bước C: Nếu chưa có trên GitHub -> Thực hiện Push
+        if not is_on_github:
+            await bot.send_message(chat_id, "🔑 Key chưa có trên GitHub. Đang thực hiện Push...")
+            success_push = await push_key_to_github(project_dir, version, actual_key_path, name)
+            if success_push:
+                await bot.send_message(chat_id, "✅ Đã push Key lên GitHub thành công.")
+            else:
+                await bot.send_message(chat_id, "⚠️ Push Key thất bại (Kiểm tra quyền ghi Repo).")
+        else:
+            print(f"ℹ️ Key {rel_key_path} đã tồn tại trên GitHub, bỏ qua bước push.")
+
+        # Dọn dẹp build cũ
         build_dir = os.path.join(project_dir, "app", "build")
         if os.path.exists(build_dir):
             try: shutil.rmtree(build_dir)
             except: pass
-
         # =========================
         # 3. BUILD
         # =========================

@@ -1,3 +1,5 @@
+**** Kiểm tra có file gradlew.bat chưa
+
 def env = System.getenv("BUILD_ENV")
 def isProd = env == "production"
 

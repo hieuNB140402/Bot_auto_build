@@ -371,6 +371,7 @@ async def build_project(bot, chat_id, project, version):
         if os.path.exists(build_dir):
             try: shutil.rmtree(build_dir)
             except: pass
+
         # =========================
         # 3. BUILD
         # =========================
